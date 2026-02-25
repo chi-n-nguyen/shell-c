@@ -7,13 +7,24 @@
 #include "shell.h"
 #include "history.h"
 
-/* Reap finished background children without blocking */
+/* Reap finished background children without blocking.
+ * Uses write() instead of fprintf() — write() is async-signal-safe;
+ * fprintf() is not and must never be called from a signal handler. */
 void sigchld_handler(int sig) {
     (void)sig;
     int status;
     pid_t pid;
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        fprintf(stderr, "[%d] done\n", pid);
+        /* Build "[<pid>] done\n" with only async-signal-safe calls */
+        char buf[32];
+        int  i = sizeof(buf);
+        buf[--i] = '\n';
+        buf[--i] = 'e'; buf[--i] = 'n'; buf[--i] = 'o'; buf[--i] = 'd';
+        buf[--i] = ' '; buf[--i] = ']';
+        pid_t tmp = pid;
+        do { buf[--i] = '0' + (int)(tmp % 10); tmp /= 10; } while (tmp > 0);
+        buf[--i] = '[';
+        write(STDERR_FILENO, buf + i, sizeof(buf) - i);
     }
 }
 
