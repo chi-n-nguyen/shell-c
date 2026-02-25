@@ -8,23 +8,10 @@
 #include "shell.h"
 
 /*
- * Set up file descriptor redirections for a child process.
- * Called after fork(), before execvp().
+ * Apply < and > file redirections in the child after pipe fds are wired.
+ * File redirections override pipe wiring when both appear on the same stage.
  */
-static void apply_redirections(Command *cmd, int in_fd, int out_fd) {
-    /* Pipe input from previous stage */
-    if (in_fd != STDIN_FILENO) {
-        dup2(in_fd, STDIN_FILENO);
-        close(in_fd);
-    }
-
-    /* Pipe output to next stage */
-    if (out_fd != STDOUT_FILENO) {
-        dup2(out_fd, STDOUT_FILENO);
-        close(out_fd);
-    }
-
-    /* File input redirection: < infile */
+static void apply_redirections(Command *cmd) {
     if (cmd->infile) {
         int fd = open(cmd->infile, O_RDONLY);
         if (fd < 0) { perror(cmd->infile); exit(1); }
@@ -32,7 +19,6 @@ static void apply_redirections(Command *cmd, int in_fd, int out_fd) {
         close(fd);
     }
 
-    /* File output redirection: > outfile or >> outfile */
     if (cmd->outfile) {
         int flags = O_WRONLY | O_CREAT | (cmd->append ? O_APPEND : O_TRUNC);
         int fd = open(cmd->outfile, flags, 0644);
@@ -79,13 +65,19 @@ void execute_pipeline(Pipeline *pl, int trace_mode) {
             signal(SIGINT,  SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
 
-            apply_redirections(cmd, in_fd, out_fd);
+            /* Step 1: wire pipe ends to stdin/stdout */
+            if (in_fd  != STDIN_FILENO)  dup2(in_fd,  STDIN_FILENO);
+            if (out_fd != STDOUT_FILENO) dup2(out_fd, STDOUT_FILENO);
 
-            /* Close all pipe fds the child doesn't need */
+            /* Step 2: close all original pipe fds — stdin/stdout retain
+               the references so the pipe stays open */
             for (int j = 0; j < n - 1; j++) {
                 close(pipe_fds[j][0]);
                 close(pipe_fds[j][1]);
             }
+
+            /* Step 3: file redirections (< > >>) override pipe wiring */
+            apply_redirections(cmd);
 
             if (trace_mode)
                 fprintf(stderr, "[trace] exec: %s (pid=%d)\n", cmd->argv[0], getpid());
