@@ -30,7 +30,8 @@ static void apply_redirections(Command *cmd) {
 
 /*
  * Execute a pipeline of one or more commands.
- * Creates n-1 pipes for n commands, forks a child per command.
+ * Creates n-1 pipes for n commands, forks one child per stage.
+ * All children share a process group so signals reach the whole pipeline.
  * --trace logs each fork/exec/pipe decision to stderr.
  */
 void execute_pipeline(Pipeline *pl, int trace_mode) {
@@ -50,6 +51,7 @@ void execute_pipeline(Pipeline *pl, int trace_mode) {
     }
 
     pid_t pids[MAX_PIPES];
+    pid_t pgid = 0;  /* shared process group; set to pids[0] on first fork */
 
     for (int i = 0; i < n; i++) {
         Command *cmd = &pl->cmds[i];
@@ -61,7 +63,13 @@ void execute_pipeline(Pipeline *pl, int trace_mode) {
         if (pid < 0) { perror("fork"); return; }
 
         if (pid == 0) {
-            /* Child: restore default signal handlers so Ctrl+C works */
+            /* Child: join (or create) the pipeline's process group.
+               Both parent and child call setpgid to eliminate the race.
+               setpgid(0,0) makes this process its own group leader;
+               setpgid(0,pgid) joins the group created by the first child. */
+            setpgid(0, pgid == 0 ? 0 : pgid);
+
+            /* Restore default signal handlers so Ctrl+C / Ctrl+Z work */
             signal(SIGINT,  SIG_DFL);
             signal(SIGTSTP, SIG_DFL);
 
@@ -87,7 +95,11 @@ void execute_pipeline(Pipeline *pl, int trace_mode) {
             exit(127);
         }
 
-        /* Parent: close pipe ends it no longer needs */
+        /* Parent: assign child to the pipeline's process group */
+        if (pgid == 0) pgid = pid;
+        setpgid(pid, pgid);
+
+        /* Close pipe ends the parent no longer needs */
         if (i > 0)     close(pipe_fds[i-1][0]);
         if (i < n - 1) close(pipe_fds[i][1]);
 
