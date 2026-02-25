@@ -115,7 +115,11 @@ void execute_pipeline(Pipeline *pl, int trace_mode) {
         return;
     }
 
-    /* Foreground: wait for all children in the pipeline */
+    /* Foreground: hand the terminal to the pipeline's process group so
+       Ctrl+C delivers SIGINT to the pipeline, not the shell */
+    if (isatty(STDIN_FILENO))
+        tcsetpgrp(STDIN_FILENO, pgid);
+
     for (int i = 0; i < n; i++) {
         int status;
         waitpid(pids[i], &status, 0);
@@ -123,4 +127,8 @@ void execute_pipeline(Pipeline *pl, int trace_mode) {
             fprintf(stderr, "[trace] pid=%d exited with status=%d\n",
                     pids[i], WEXITSTATUS(status));
     }
+
+    /* Reclaim the terminal for the shell */
+    if (isatty(STDIN_FILENO))
+        tcsetpgrp(STDIN_FILENO, getpgrp());
 }
