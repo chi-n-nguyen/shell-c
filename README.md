@@ -1,19 +1,19 @@
 # shell-c
 
-A POSIX-compliant Unix shell implemented in C.
+A POSIX-compliant Unix shell implemented in C with pipelines, job control, and async-signal-safe process management.
 
 ## Features
 
-- **Pipelines** — arbitrary-length pipelines (`cmd1 | cmd2 | cmd3`)
+- **Multi-stage pipelines** — arbitrary-length pipelines (`cmd1 | cmd2 | cmd3`)
 - **I/O redirection** — `<`, `>`, `>>`
 - **Background execution** — trailing `&`
-- **Signal handling** — Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; background children are reaped asynchronously via `SIGCHLD`
+- **Job control** — `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z suspends a foreground job and registers it in the job table; `fg` restores terminal ownership via `tcsetpgrp` and resumes the process group with `SIGCONT`
+- **Signal handling** — Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops and job table mutations to eliminate handler races
 - **Process groups** — each pipeline runs in its own process group so signals reach every stage
-- **Job control** — `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z suspends a foreground job and registers it in the job table; `fg` restores terminal ownership and resumes via `SIGCONT`
-- **Environment variable expansion** — `$VAR` and `$?` are expanded at parse time
+- **Variable expansion** — `$VAR` looks up the environment; `$?` expands to the last foreground exit status
 - **Built-ins** — `cd`, `exit`, `export`, `history`, `jobs`, `fg`, `bg`
 - **Command history** — ring buffer of the last 100 commands
-- **Trace mode** — `--trace` logs every fork, exec, and pipe to stderr
+- **Trace mode** — `--trace` logs every fork, exec, and pipe decision to stderr
 
 ## Build
 
@@ -30,6 +30,25 @@ Requires a C11 compiler and POSIX.1-2008.
 ./shell-c --trace   # with execution tracing
 ```
 
+## Examples
+
+```sh
+# Multi-stage pipeline with I/O redirection
+cat /etc/passwd | grep root | cut -d: -f1 > out.txt
+
+# Background execution and job control
+sleep 60 &          # [1] 12345
+jobs                # [1] running   sleep 60 &
+fg %1               # brings job 1 to foreground
+# Ctrl+Z            # [1]+ stopped   sleep 60 &
+bg %1               # resumes in background
+
+# Exit status inspection
+ls /nonexistent
+echo $?             # 1
+echo $HOME          # /Users/you
+```
+
 ## Built-in commands
 
 | Command | Description |
@@ -41,3 +60,14 @@ Requires a C11 compiler and POSIX.1-2008.
 | `jobs` | List active background and stopped jobs |
 | `fg [%N]` | Bring job N (or the most recent) to the foreground |
 | `bg [%N]` | Resume stopped job N (or most recent) in the background |
+
+## Implementation notes
+
+| Concern | Approach |
+|---------|----------|
+| Pipeline wiring | `pipe(2)` + `dup2(2)` in each child before `execvp`; all unused pipe ends closed in parent and child |
+| Process isolation | `setpgid(2)` puts every pipeline in its own process group; both parent and child call it to close the TOCTOU race |
+| Terminal handoff | `tcsetpgrp(3)` gives the terminal to the foreground pipeline; reclaimed by the shell on return |
+| Job table safety | `SIGCHLD` blocked (`sigprocmask`) around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields — no stdio |
+| Stopped job detection | `SA_NOCLDSTOP` omitted so `SIGCHLD` fires on `SIGTSTP`; `waitpid` called with `WUNTRACED` in the foreground wait path |
+| Background reaping | `waitpid(-1, WNOHANG \| WUNTRACED)` in `SIGCHLD` handler updates job status; main loop calls `jobs_notify_done()` before each prompt |
