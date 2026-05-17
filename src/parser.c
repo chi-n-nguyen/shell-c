@@ -1,15 +1,39 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "shell.h"
 
 /*
+ * Expand a single token that is exactly a variable reference:
+ *   $?        → decimal string of last_exit
+ *   $VARNAME  → value from the environment, or "" if unset
+ * Tokens not starting with $ are returned unchanged (pointer is reused).
+ *
+ * Returns the expanded value; buf is used only when $? requires formatting.
+ */
+static char *expand_var(char *tok, char *buf, size_t bufsz) {
+    if (tok[0] != '$')
+        return tok;
+    if (strcmp(tok, "$?") == 0) {
+        snprintf(buf, bufsz, "%d", last_exit);
+        return buf;
+    }
+    const char *val = getenv(tok + 1);
+    return val ? (char *)val : (char *)"";
+}
+
+/*
  * Tokenise a single command segment (no pipes) into a Command struct.
- * Handles: <infile, >outfile, >>outfile, trailing &
+ * Handles: <infile, >outfile, >>outfile, trailing &, $VAR/$? expansion.
  * Returns 0 on success, -1 on error.
  */
 static int parse_command(char *segment, Command *cmd) {
     memset(cmd, 0, sizeof(Command));
+
+    /* One buffer per call for $? formatting; static is safe because we
+       execute one pipeline at a time (sequential parse then execute). */
+    static char last_exit_buf[16];
 
     char *token;
     char *rest = segment;
@@ -44,7 +68,8 @@ static int parse_command(char *segment, Command *cmd) {
                 fprintf(stderr, "shell-c: too many arguments\n");
                 return -1;
             }
-            cmd->argv[cmd->argc++] = token;
+            cmd->argv[cmd->argc++] = expand_var(token, last_exit_buf,
+                                                sizeof(last_exit_buf));
         }
     }
 

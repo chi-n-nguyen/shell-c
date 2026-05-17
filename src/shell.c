@@ -6,25 +6,24 @@
 #include <signal.h>
 #include "shell.h"
 #include "history.h"
+#include "jobs.h"
 
-/* Reap finished background children without blocking.
- * Uses write() instead of fprintf() — write() is async-signal-safe;
- * fprintf() is not and must never be called from a signal handler. */
+/*
+ * Reap finished/stopped background children without blocking.
+ * Updates job table status; main loop prints notifications via jobs_notify_done().
+ * Uses only async-signal-safe operations: waitpid() and volatile struct field writes.
+ */
 void sigchld_handler(int sig) {
     (void)sig;
     int status;
     pid_t pid;
-    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        /* Build "[<pid>] done\n" with only async-signal-safe calls */
-        char buf[32];
-        int  i = sizeof(buf);
-        buf[--i] = '\n';
-        buf[--i] = 'e'; buf[--i] = 'n'; buf[--i] = 'o'; buf[--i] = 'd';
-        buf[--i] = ' '; buf[--i] = ']';
-        pid_t tmp = pid;
-        do { buf[--i] = '0' + (int)(tmp % 10); tmp /= 10; } while (tmp > 0);
-        buf[--i] = '[';
-        write(STDERR_FILENO, buf + i, sizeof(buf) - i);
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+        Job *j = job_find_pid(pid);
+        if (!j) continue;
+        if (WIFSTOPPED(status))
+            j->status = JOB_STOPPED;
+        else if (WIFEXITED(status) || WIFSIGNALED(status))
+            j->status = JOB_DONE;
     }
 }
 
@@ -39,9 +38,11 @@ void print_prompt(void) {
 
 void shell_loop(int trace_mode) {
     char input[MAX_INPUT];
+    char cmdline[MAX_INPUT];
     Pipeline pl;
 
     while (1) {
+        jobs_notify_done();
         print_prompt();
 
         if (!fgets(input, sizeof(input), stdin)) {
@@ -50,13 +51,16 @@ void shell_loop(int trace_mode) {
             break;
         }
 
-        /* Strip trailing newline */
         input[strcspn(input, "\n")] = '\0';
 
         if (strlen(input) == 0)
             continue;
 
-        history_add(input);
+        /* Save original line before parse_pipeline mutates it with strtok_r */
+        strncpy(cmdline, input, sizeof(cmdline) - 1);
+        cmdline[sizeof(cmdline) - 1] = '\0';
+
+        history_add(cmdline);
 
         if (parse_pipeline(input, &pl) < 0)
             continue;
@@ -68,6 +72,6 @@ void shell_loop(int trace_mode) {
         if (pl.ncmds == 1 && run_builtin(&pl.cmds[0]))
             continue;
 
-        execute_pipeline(&pl, trace_mode);
+        execute_pipeline(&pl, trace_mode, cmdline);
     }
 }

@@ -5,6 +5,7 @@
 #include <signal.h>
 #include "shell.h"
 #include "history.h"
+#include "jobs.h"
 
 int main(int argc, char *argv[]) {
     int trace_mode = 0;
@@ -21,16 +22,16 @@ int main(int argc, char *argv[]) {
     sigaction(SIGINT,  &sa_ign, NULL);
     sigaction(SIGTSTP, &sa_ign, NULL);
 
-    /* Reap background children asynchronously.
-       SA_RESTART: auto-restart fgets after the handler returns.
-       SA_NOCLDSTOP: suppress SIGCHLD on Ctrl+Z — only fire on child exit. */
+    /* Reap background children and detect stopped jobs.
+       SA_NOCLDSTOP removed so SIGCHLD fires on Ctrl+Z as well as exit. */
     struct sigaction sa_chld;
     memset(&sa_chld, 0, sizeof(sa_chld));
     sa_chld.sa_handler = sigchld_handler;
-    sa_chld.sa_flags   = SA_RESTART | SA_NOCLDSTOP;
+    sa_chld.sa_flags   = SA_RESTART;
     sigaction(SIGCHLD, &sa_chld, NULL);
 
     history_init();
+    jobs_init();
     shell_loop(trace_mode);
     history_free();
 

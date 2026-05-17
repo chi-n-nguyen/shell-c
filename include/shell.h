@@ -23,6 +23,9 @@ typedef struct {
     int     ncmds;
 } Pipeline;
 
+/* Exit status of the last foreground pipeline; $? expands to this */
+extern int last_exit;
+
 /* Main REPL */
 void shell_loop(int trace_mode);
 
@@ -33,7 +36,16 @@ void sigchld_handler(int sig);
 int  parse_pipeline(char *line, Pipeline *pl);
 
 /* Execute a parsed pipeline */
-void execute_pipeline(Pipeline *pl, int trace_mode);
+void execute_pipeline(Pipeline *pl, int trace_mode, const char *cmdline);
+
+/*
+ * Give the terminal to pgid, optionally send SIGCONT (send_cont != 0),
+ * then wait for all pids with WUNTRACED.  If the job stops, it is added
+ * to the job table and -1 is returned; otherwise last_exit is updated
+ * and the exit status is returned.
+ */
+int  wait_foreground(pid_t pgid, pid_t *pids, int npids,
+                     const char *cmdline, int send_cont);
 
 /* Built-in command handler; returns 1 if handled, 0 otherwise */
 int  run_builtin(Command *cmd);

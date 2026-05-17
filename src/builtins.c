@@ -2,9 +2,17 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <errno.h>
 #include "shell.h"
 #include "history.h"
+#include "jobs.h"
+
+/* Parse %N or bare N job spec; returns job id, or -1 if spec is NULL */
+static int parse_job_spec(const char *spec) {
+    if (!spec) return -1;
+    return (spec[0] == '%') ? atoi(spec + 1) : atoi(spec);
+}
 
 /*
  * Run a built-in command in the shell process itself (no fork).
@@ -50,11 +58,69 @@ int run_builtin(Command *cmd) {
             fprintf(stderr, "export: expected VAR=VALUE format\n");
             return 1;
         }
-        /* Split into name and value for setenv */
         *eq = '\0';
         if (setenv(cmd->argv[1], eq + 1, 1) != 0)
             perror("export");
-        *eq = '='; /* restore original string */
+        *eq = '=';
+        return 1;
+    }
+
+    /* jobs — list active background/stopped jobs */
+    if (strcmp(name, "jobs") == 0) {
+        jobs_print_active();
+        return 1;
+    }
+
+    /* fg [%N] — bring job to foreground */
+    if (strcmp(name, "fg") == 0) {
+        Job *j;
+        int id = parse_job_spec(cmd->argv[1]);
+        j = (id > 0) ? job_find_id(id) : job_last();
+        if (!j) { fprintf(stderr, "fg: no current job\n"); return 1; }
+
+        /* Snapshot job fields before removing — SIGCHLD handler may modify *j */
+        pid_t  pgid = j->pgid;
+        int    npids = j->npids;
+        pid_t  pids[MAX_PIPES];
+        char   cmdline[MAX_INPUT];
+        int    jid = j->id;
+        memcpy(pids, j->pids, (size_t)npids * sizeof(pid_t));
+        strncpy(cmdline, j->cmdline, sizeof(cmdline) - 1);
+        cmdline[sizeof(cmdline) - 1] = '\0';
+
+        fprintf(stderr, "%s\n", cmdline);
+
+        /* Block SIGCHLD before removal so handler can't race between
+           job_remove and the wait inside wait_foreground */
+        sigset_t mask, old;
+        sigemptyset(&mask);
+        sigaddset(&mask, SIGCHLD);
+        sigprocmask(SIG_BLOCK, &mask, &old);
+
+        job_remove(jid);
+
+        /* wait_foreground also blocks SIGCHLD; nesting SIG_SETMASK is safe:
+           it saves the current (blocked) mask and restores it on return,
+           then our final SIG_SETMASK below restores the original mask. */
+        wait_foreground(pgid, pids, npids, cmdline, 1 /* send SIGCONT */);
+
+        sigprocmask(SIG_SETMASK, &old, NULL);
+        return 1;
+    }
+
+    /* bg [%N] — resume a stopped job in the background */
+    if (strcmp(name, "bg") == 0) {
+        Job *j;
+        int id = parse_job_spec(cmd->argv[1]);
+        j = (id > 0) ? job_find_id(id) : job_last_stopped();
+        if (!j) { fprintf(stderr, "bg: no stopped job\n"); return 1; }
+        if (j->status != JOB_STOPPED) {
+            fprintf(stderr, "bg: job [%d] is not stopped\n", j->id);
+            return 1;
+        }
+        j->status = JOB_RUNNING;
+        kill(-(j->pgid), SIGCONT);
+        fprintf(stderr, "[%d] %s &\n", j->id, j->cmdline);
         return 1;
     }
 
