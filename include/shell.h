@@ -1,6 +1,7 @@
 #ifndef SHELL_H
 #define SHELL_H
 
+#include <stdio.h>
 #include <sys/types.h>
 
 #define MAX_INPUT   4096
@@ -29,8 +30,8 @@ typedef struct {
 /* Exit status of the last foreground pipeline; $? expands to this */
 extern int last_exit;
 
-/* Main REPL */
-void shell_loop(int trace_mode);
+/* Main REPL — pass stdin for interactive use, an open FILE* for scripts */
+void shell_loop(int trace_mode, FILE *src);
 
 /* Signal handler for reaping background children */
 void sigchld_handler(int sig);

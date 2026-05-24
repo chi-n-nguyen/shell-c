@@ -37,18 +37,26 @@ void print_prompt(void) {
     fflush(stdout);
 }
 
-void shell_loop(int trace_mode) {
+/*
+ * Main read-eval-print loop.
+ * src == stdin  → interactive mode: print prompts, add history, notify bg jobs.
+ * src == file   → script mode: suppress prompts and history; commands are read
+ *                 and executed silently, matching standard shell script behaviour.
+ */
+void shell_loop(int trace_mode, FILE *src) {
     char input[MAX_INPUT];
     char cmdline[MAX_INPUT];
     Pipeline pl;
+    int  interactive = isatty(fileno(src));
 
     while (1) {
-        jobs_notify_done();
-        print_prompt();
+        if (interactive) {
+            jobs_notify_done();
+            print_prompt();
+        }
 
-        if (!fgets(input, sizeof(input), stdin)) {
-            /* EOF (Ctrl+D) */
-            printf("\n");
+        if (!fgets(input, sizeof(input), src)) {
+            if (interactive) printf("\n");
             break;
         }
 
@@ -61,10 +69,11 @@ void shell_loop(int trace_mode) {
         strncpy(cmdline, input, sizeof(cmdline) - 1);
         cmdline[sizeof(cmdline) - 1] = '\0';
 
-        history_add(cmdline);
+        /* Only record history in interactive sessions */
+        if (interactive)
+            history_add(cmdline);
 
-        /* Reset expansion arena once per command line; all $() calls
-           within this pipeline share the same arena lifetime */
+        /* Reset expansion arena once per command line */
         expand_arena_reset();
 
         if (parse_pipeline(input, &pl, trace_mode) < 0)

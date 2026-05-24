@@ -8,11 +8,17 @@
 #include "jobs.h"
 
 int main(int argc, char *argv[]) {
-    int trace_mode = 0;
+    int   trace_mode = 0;
+    FILE *src        = stdin;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--trace") == 0)
+        if (strcmp(argv[i], "--trace") == 0) {
             trace_mode = 1;
+        } else if (src == stdin) {
+            /* First non-flag argument is treated as a script file */
+            src = fopen(argv[i], "r");
+            if (!src) { perror(argv[i]); return 1; }
+        }
     }
 
     /* Shell ignores Ctrl+C and Ctrl+Z; children restore defaults after fork */
@@ -32,8 +38,9 @@ int main(int argc, char *argv[]) {
 
     history_init();
     jobs_init();
-    shell_loop(trace_mode);
+    shell_loop(trace_mode, src);
     history_free();
 
+    if (src != stdin) fclose(src);
     return 0;
 }
