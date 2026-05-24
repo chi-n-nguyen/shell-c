@@ -11,9 +11,10 @@ A POSIX-compliant Unix shell implemented in C with pipelines, job control, and a
 - **Signal handling** — Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops and job table mutations to eliminate handler races
 - **Process groups** — each pipeline runs in its own process group so signals reach every stage
 - **Command substitution** — `$(cmd)` forks a subshell, captures its stdout, and splices the result inline; supports embedded substitutions (`/usr/$(uname -m)/lib`) and pipelines inside (`$(cat f | wc -l)`)
-- **Variable expansion** — `$VAR` looks up the environment; `$?` expands to the last foreground exit status
+- **Variable expansion** — `$VAR` looks up the environment; `$?` expands to the last foreground exit status; `~` and `~user` expand to home directories via `getpwuid`/`getpwnam`
+- **Script execution** — `./shell-c script.sh` runs a file non-interactively; prompts, job notifications, and history recording are suppressed automatically
 - **Built-ins** — `cd`, `exit`, `export`, `history`, `jobs`, `fg`, `bg`
-- **Command history** — ring buffer of the last 100 commands
+- **Persistent history** — commands saved to `~/.shell-c_history` on exit and restored on startup; capped at 100 entries; not recorded during script execution
 - **Trace mode** — `--trace` logs every fork, exec, and pipe decision to stderr
 
 ## Build
@@ -27,8 +28,10 @@ Requires a C11 compiler and POSIX.1-2008.
 ## Usage
 
 ```
-./shell-c           # interactive mode
-./shell-c --trace   # with execution tracing
+./shell-c                  # interactive mode
+./shell-c script.sh        # run a script file
+./shell-c --trace          # interactive with execution tracing
+./shell-c --trace script.sh  # trace a script
 ```
 
 ## Examples
@@ -54,6 +57,11 @@ bg %1               # resumes in background
 echo "today is $(date)"
 echo /usr/$(uname -m)/lib
 echo "$(cat /etc/hosts | wc -l) lines"
+
+# Tilde expansion
+echo ~              # /Users/you
+ls ~/Downloads
+echo ~root          # /var/root
 
 # Exit status and variable expansion
 ls /nonexistent
@@ -81,6 +89,9 @@ echo $HOME          # /Users/you
 | Stderr redirect | stdout redirected before stderr in `apply_redirections` so `> file 2>&1` correctly points both fds at the file; `2>&1` is `dup2(STDOUT_FILENO, STDERR_FILENO)` |
 | Command substitution | `$(cmd)` forks a subshell whose stdout is a pipe; parent drains the pipe with a doubling read loop and strips trailing newlines; stdin set to `/dev/null` suppresses `tcsetpgrp` inside the subshell; `SIGCHLD` blocked around fork+`waitpid` prevents the reaping handler racing with `cmd_subst`; expanded strings live in a 64 KB arena reset once per command line |
 | Depth-aware tokenizer | `next_arg()` and `split_pipes()` track `$(` nesting depth so spaces and `\|` inside a substitution are not treated as delimiters |
+| Tilde expansion | handled at the start of `expand_token` before the `$` scan; `~` resolves via `$HOME` then `getpwuid(3)`; `~user` via `getpwnam(3)`; unknown user left unexpanded |
+| Persistent history | loaded from `~/.shell-c_history` in `history_init`; rewritten (capped at 100 lines) in `history_free`; suppressed in script mode via `isatty(fileno(src))` |
+| Script execution | `shell_loop` accepts `FILE *src`; `isatty(fileno(src))` gates prompts, job notifications, and history — no special-casing needed elsewhere |
 | Process isolation | `setpgid(2)` puts every pipeline in its own process group; both parent and child call it to close the TOCTOU race |
 | Terminal handoff | `tcsetpgrp(3)` gives the terminal to the foreground pipeline; reclaimed by the shell on return |
 | Job table safety | `SIGCHLD` blocked (`sigprocmask`) around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields — no stdio |
