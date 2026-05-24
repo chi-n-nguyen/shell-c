@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <pwd.h>
 #include "shell.h"
 #include "expand.h"
 
@@ -134,7 +135,7 @@ char *cmd_subst(const char *cmd, int trace_mode) {
  * (no arena allocation).
  */
 char *expand_token(const char *tok, int trace_mode) {
-    if (!strchr(tok, '$'))
+    if (!strchr(tok, '$') && tok[0] != '~')
         return (char *)tok;
 
     /* Build into a local buffer first, then copy to the arena */
@@ -144,6 +145,40 @@ char *expand_token(const char *tok, int trace_mode) {
     const char *p = tok;
 
     while (*p && out < lim) {
+        /* Tilde expansion — only at the very start of the token */
+        if (*p == '~' && p == tok) {
+            const char *home = NULL;
+
+            if (*(p + 1) == '/' || *(p + 1) == '\0') {
+                /* ~/...  or bare ~  →  $HOME, fall back to passwd db */
+                home = getenv("HOME");
+                if (!home) {
+                    struct passwd *pw = getpwuid(getuid());
+                    if (pw) home = pw->pw_dir;
+                }
+                p++; /* skip '~'; '/' (if any) copied next iteration */
+            } else {
+                /* ~user/...  →  look up user in passwd db */
+                const char *us = p + 1, *ue = us;
+                while (*ue && *ue != '/') ue++;
+                char username[256];
+                size_t ulen = (size_t)(ue - us);
+                if (ulen < sizeof(username)) {
+                    memcpy(username, us, ulen);
+                    username[ulen] = '\0';
+                    struct passwd *pw = getpwnam(username);
+                    if (pw) { home = pw->pw_dir; p = ue; }
+                }
+                /* unknown user — leave ~ in place, fall through */
+            }
+
+            if (home) {
+                size_t hlen = strlen(home);
+                if (out + hlen < lim) { memcpy(out, home, hlen); out += hlen; }
+                continue;
+            }
+        }
+
         if (*p != '$') { *out++ = *p++; continue; }
 
         if (*(p + 1) == '(') {
