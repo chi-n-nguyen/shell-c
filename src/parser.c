@@ -114,6 +114,24 @@ static int parse_command(char *segment, Command *cmd, int trace_mode) {
             cmd->outfile = file;
             cmd->append  = 0;
 
+        /* Stderr → stdout: 2>&1 */
+        } else if (strcmp(token, "2>&1") == 0) {
+            cmd->err_to_out = 1;
+
+        /* Stderr append: 2>>file  or  2>> file */
+        } else if (strncmp(token, "2>>", 3) == 0) {
+            char *file = token[3] ? token + 3 : next_arg(&pos);
+            if (!file) { fprintf(stderr, "shell-c: expected filename after 2>>\n"); return -1; }
+            cmd->errfile     = file;
+            cmd->err_append  = 1;
+
+        /* Stderr redirect: 2>file  or  2> file */
+        } else if (strncmp(token, "2>", 2) == 0) {
+            char *file = token[2] ? token + 2 : next_arg(&pos);
+            if (!file) { fprintf(stderr, "shell-c: expected filename after 2>\n"); return -1; }
+            cmd->errfile     = file;
+            cmd->err_append  = 0;
+
         /* Background flag */
         } else if (strcmp(token, "&") == 0) {
             cmd->background = 1;

@@ -11,8 +11,10 @@
 int last_exit = 0;
 
 /*
- * Apply < and > file redirections in the child after pipe fds are wired.
- * File redirections override pipe wiring when both appear on the same stage.
+ * Apply <, >, >>, 2>, 2>>, 2>&1 redirections in the child after pipe
+ * fds are wired.  File redirections override pipe wiring.
+ * stdout is redirected before stderr so that 2>&1 captures the
+ * already-redirected stdout (the common "> file 2>&1" idiom).
  */
 static void apply_redirections(Command *cmd) {
     if (cmd->infile) {
@@ -27,6 +29,19 @@ static void apply_redirections(Command *cmd) {
         int fd = open(cmd->outfile, flags, 0644);
         if (fd < 0) { perror(cmd->outfile); exit(1); }
         dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
+
+    /* Stderr redirections — applied after stdout so 2>&1 sees the
+       final stdout destination, matching POSIX left-to-right semantics
+       for the common "> file 2>&1" pattern. */
+    if (cmd->err_to_out) {
+        dup2(STDOUT_FILENO, STDERR_FILENO);
+    } else if (cmd->errfile) {
+        int flags = O_WRONLY | O_CREAT | (cmd->err_append ? O_APPEND : O_TRUNC);
+        int fd = open(cmd->errfile, flags, 0644);
+        if (fd < 0) { perror(cmd->errfile); exit(1); }
+        dup2(fd, STDERR_FILENO);
         close(fd);
     }
 }

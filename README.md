@@ -5,7 +5,7 @@ A POSIX-compliant Unix shell implemented in C with pipelines, job control, and a
 ## Features
 
 - **Multi-stage pipelines** — arbitrary-length pipelines (`cmd1 | cmd2 | cmd3`)
-- **I/O redirection** — `<`, `>`, `>>`
+- **I/O redirection** — `<`, `>`, `>>`, `2>`, `2>>`, `2>&1`
 - **Background execution** — trailing `&`
 - **Job control** — `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z suspends a foreground job and registers it in the job table; `fg` restores terminal ownership via `tcsetpgrp` and resumes the process group with `SIGCONT`
 - **Signal handling** — Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops and job table mutations to eliminate handler races
@@ -35,6 +35,12 @@ Requires a C11 compiler and POSIX.1-2008.
 ```sh
 # Multi-stage pipeline with I/O redirection
 cat /etc/passwd | grep root | cut -d: -f1 > out.txt
+
+# Stderr redirection
+gcc bad.c 2> errors.txt          # stderr to file
+make 2>&1 | grep error           # merge stderr into stdout, then pipe
+make > build.log 2>&1            # stdout + stderr to same file
+make >> build.log 2>> build.log  # append both streams
 
 # Background execution and job control
 sleep 60 &          # [1] 12345
@@ -66,6 +72,7 @@ echo $HOME          # /Users/you
 | Concern | Approach |
 |---------|----------|
 | Pipeline wiring | `pipe(2)` + `dup2(2)` in each child before `execvp`; all unused pipe ends closed in parent and child |
+| Stderr redirect | stdout redirected before stderr in `apply_redirections` so `> file 2>&1` correctly points both fds at the file; `2>&1` is `dup2(STDOUT_FILENO, STDERR_FILENO)` |
 | Process isolation | `setpgid(2)` puts every pipeline in its own process group; both parent and child call it to close the TOCTOU race |
 | Terminal handoff | `tcsetpgrp(3)` gives the terminal to the foreground pipeline; reclaimed by the shell on return |
 | Job table safety | `SIGCHLD` blocked (`sigprocmask`) around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields — no stdio |

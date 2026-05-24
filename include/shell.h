@@ -11,10 +11,13 @@
 typedef struct {
     char  *argv[MAX_ARGS];  /* null-terminated argument list */
     int    argc;
-    char  *infile;          /* < redirection, NULL if none  */
-    char  *outfile;         /* > redirection, NULL if none  */
-    int    append;          /* 1 if >>, 0 if >              */
-    int    background;      /* 1 if trailing &              */
+    char  *infile;          /* < redirection, NULL if none   */
+    char  *outfile;         /* > redirection, NULL if none   */
+    int    append;          /* 1 if >>, 0 if >               */
+    char  *errfile;         /* 2> redirection, NULL if none  */
+    int    err_append;      /* 1 if 2>>, 0 if 2>             */
+    int    err_to_out;      /* 1 if 2>&1                     */
+    int    background;      /* 1 if trailing &               */
 } Command;
 
 /* Represents a full pipeline: cmd1 | cmd2 | ... */
