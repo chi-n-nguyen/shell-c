@@ -1,62 +1,117 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include "shell.h"
+#include "expand.h"
+
+/* ------------------------------------------------------------------ */
+/* Depth-aware pipe splitter                                           */
+/* ------------------------------------------------------------------ */
 
 /*
- * Expand a single token that is exactly a variable reference:
- *   $?        → decimal string of last_exit
- *   $VARNAME  → value from the environment, or "" if unset
- * Tokens not starting with $ are returned unchanged (pointer is reused).
- *
- * Returns the expanded value; buf is used only when $? requires formatting.
+ * Split `line` on unquoted '|' characters, skipping any '|' that
+ * appears inside a $(...) command substitution.  Writes pointers to
+ * NUL-terminated segments into segs[] and returns the count, or -1 if
+ * there are more than `max` segments.
  */
-static char *expand_var(char *tok, char *buf, size_t bufsz) {
-    if (tok[0] != '$')
-        return tok;
-    if (strcmp(tok, "$?") == 0) {
-        snprintf(buf, bufsz, "%d", last_exit);
-        return buf;
+static int split_pipes(char *line, char **segs, int max) {
+    int   n     = 0;
+    int   depth = 0;   /* $( nesting depth */
+    char *start = line;
+
+    for (char *p = line; *p; p++) {
+        if (*p == '$' && *(p + 1) == '(') { depth++; p++; continue; }
+        if (depth > 0) {
+            if      (*p == '(') depth++;
+            else if (*p == ')') depth--;
+            continue;
+        }
+        if (*p == '|') {
+            if (n >= max) { fprintf(stderr, "shell-c: too many pipes\n"); return -1; }
+            *p        = '\0';
+            segs[n++] = start;
+            start     = p + 1;
+        }
     }
-    const char *val = getenv(tok + 1);
-    return val ? (char *)val : (char *)"";
+    if (n >= max) { fprintf(stderr, "shell-c: too many pipes\n"); return -1; }
+    segs[n++] = start;
+    return n;
 }
 
+/* ------------------------------------------------------------------ */
+/* Depth-aware argument tokenizer                                      */
+/* ------------------------------------------------------------------ */
+
 /*
- * Tokenise a single command segment (no pipes) into a Command struct.
- * Handles: <infile, >outfile, >>outfile, trailing &, $VAR/$? expansion.
+ * Return the next whitespace-delimited token from *pos, advancing *pos.
+ * Whitespace inside $(...) is not treated as a delimiter, so
+ * $(date +%Y) is returned as a single token.
+ * Returns NULL when no more tokens remain.
+ */
+static char *next_arg(char **pos) {
+    char *p = *pos;
+
+    /* skip leading whitespace */
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p) { *pos = p; return NULL; }
+
+    char *start = p;
+    int   depth = 0;
+
+    while (*p) {
+        if (*p == '$' && *(p + 1) == '(') { depth++; p += 2; continue; }
+        if (depth > 0) {
+            if      (*p == '(') depth++;
+            else if (*p == ')') { if (--depth == 0) { p++; continue; } }
+            p++;
+            continue;
+        }
+        /* At depth 0, whitespace ends the token */
+        if (*p == ' ' || *p == '\t') break;
+        p++;
+    }
+
+    if (*p) { *p = '\0'; p++; }
+    *pos = p;
+    return start;
+}
+
+/* ------------------------------------------------------------------ */
+/* Command parser                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Tokenise a single pipeline segment into a Command struct.
+ * Redirection operators and '&' are recognised; all argument tokens
+ * are passed through expand_token() for $VAR / $? / $() expansion.
  * Returns 0 on success, -1 on error.
  */
-static int parse_command(char *segment, Command *cmd) {
+static int parse_command(char *segment, Command *cmd, int trace_mode) {
     memset(cmd, 0, sizeof(Command));
 
-    /* One buffer per call for $? formatting; static is safe because we
-       execute one pipeline at a time (sequential parse then execute). */
-    static char last_exit_buf[16];
-
+    char *pos = segment;
     char *token;
-    char *rest = segment;
 
-    while ((token = strtok_r(rest, " \t", &rest)) != NULL) {
+    while ((token = next_arg(&pos)) != NULL) {
+
         /* Input redirection */
         if (strcmp(token, "<") == 0) {
-            token = strtok_r(rest, " \t", &rest);
-            if (!token) { fprintf(stderr, "shell-c: expected filename after <\n"); return -1; }
-            cmd->infile = token;
+            char *file = next_arg(&pos);
+            if (!file) { fprintf(stderr, "shell-c: expected filename after <\n"); return -1; }
+            cmd->infile = file;
 
-        /* Append output redirection */
+        /* Append redirection */
         } else if (strcmp(token, ">>") == 0) {
-            token = strtok_r(rest, " \t", &rest);
-            if (!token) { fprintf(stderr, "shell-c: expected filename after >>\n"); return -1; }
-            cmd->outfile = token;
+            char *file = next_arg(&pos);
+            if (!file) { fprintf(stderr, "shell-c: expected filename after >>\n"); return -1; }
+            cmd->outfile = file;
             cmd->append  = 1;
 
         /* Output redirection */
         } else if (strcmp(token, ">") == 0) {
-            token = strtok_r(rest, " \t", &rest);
-            if (!token) { fprintf(stderr, "shell-c: expected filename after >\n"); return -1; }
-            cmd->outfile = token;
+            char *file = next_arg(&pos);
+            if (!file) { fprintf(stderr, "shell-c: expected filename after >\n"); return -1; }
+            cmd->outfile = file;
             cmd->append  = 0;
 
         /* Background flag */
@@ -68,8 +123,8 @@ static int parse_command(char *segment, Command *cmd) {
                 fprintf(stderr, "shell-c: too many arguments\n");
                 return -1;
             }
-            cmd->argv[cmd->argc++] = expand_var(token, last_exit_buf,
-                                                sizeof(last_exit_buf));
+            /* Expand $VAR, $?, $(cmd) — may execute a subshell eagerly */
+            cmd->argv[cmd->argc++] = expand_token(token, trace_mode);
         }
     }
 
@@ -77,28 +132,25 @@ static int parse_command(char *segment, Command *cmd) {
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Pipeline parser                                                     */
+/* ------------------------------------------------------------------ */
+
 /*
- * Split input on '|' then parse each segment into a Command.
- * Populates Pipeline *pl. Returns 0 on success, -1 on parse error.
+ * Split input on '|' (depth-aware) then parse each segment into a
+ * Command.  trace_mode is threaded through so cmd_subst can emit
+ * [trace] lines for commands executed during expansion.
+ * Returns 0 on success, -1 on error.
  */
-int parse_pipeline(char *line, Pipeline *pl) {
+int parse_pipeline(char *line, Pipeline *pl, int trace_mode) {
     memset(pl, 0, sizeof(Pipeline));
 
-    char *segments[MAX_PIPES];
-    int   nseg = 0;
-
-    char *rest = line;
-    char *seg;
-    while ((seg = strtok_r(rest, "|", &rest)) != NULL) {
-        if (nseg >= MAX_PIPES) {
-            fprintf(stderr, "shell-c: too many pipes\n");
-            return -1;
-        }
-        segments[nseg++] = seg;
-    }
+    char *segs[MAX_PIPES];
+    int   nseg = split_pipes(line, segs, MAX_PIPES);
+    if (nseg < 0) return -1;
 
     for (int i = 0; i < nseg; i++) {
-        if (parse_command(segments[i], &pl->cmds[i]) < 0)
+        if (parse_command(segs[i], &pl->cmds[i], trace_mode) < 0)
             return -1;
         if (pl->cmds[i].argc == 0)
             continue;

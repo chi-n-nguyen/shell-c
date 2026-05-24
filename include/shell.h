@@ -33,7 +33,7 @@ void shell_loop(int trace_mode);
 void sigchld_handler(int sig);
 
 /* Parse raw input line into a Pipeline */
-int  parse_pipeline(char *line, Pipeline *pl);
+int  parse_pipeline(char *line, Pipeline *pl, int trace_mode);
 
 /* Execute a parsed pipeline */
 void execute_pipeline(Pipeline *pl, int trace_mode, const char *cmdline);

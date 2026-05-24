@@ -7,6 +7,7 @@
 #include "shell.h"
 #include "history.h"
 #include "jobs.h"
+#include "expand.h"
 
 /*
  * Reap finished/stopped background children without blocking.
@@ -62,7 +63,11 @@ void shell_loop(int trace_mode) {
 
         history_add(cmdline);
 
-        if (parse_pipeline(input, &pl) < 0)
+        /* Reset expansion arena once per command line; all $() calls
+           within this pipeline share the same arena lifetime */
+        expand_arena_reset();
+
+        if (parse_pipeline(input, &pl, trace_mode) < 0)
             continue;
 
         if (pl.ncmds == 0)
