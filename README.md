@@ -10,6 +10,7 @@ A POSIX-compliant Unix shell implemented in C with pipelines, job control, and a
 - **Job control** — `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z suspends a foreground job and registers it in the job table; `fg` restores terminal ownership via `tcsetpgrp` and resumes the process group with `SIGCONT`
 - **Signal handling** — Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops and job table mutations to eliminate handler races
 - **Process groups** — each pipeline runs in its own process group so signals reach every stage
+- **Command substitution** — `$(cmd)` forks a subshell, captures its stdout, and splices the result inline; supports embedded substitutions (`/usr/$(uname -m)/lib`) and pipelines inside (`$(cat f | wc -l)`)
 - **Variable expansion** — `$VAR` looks up the environment; `$?` expands to the last foreground exit status
 - **Built-ins** — `cd`, `exit`, `export`, `history`, `jobs`, `fg`, `bg`
 - **Command history** — ring buffer of the last 100 commands
@@ -49,7 +50,12 @@ fg %1               # brings job 1 to foreground
 # Ctrl+Z            # [1]+ stopped   sleep 60 &
 bg %1               # resumes in background
 
-# Exit status inspection
+# Command substitution — standalone, embedded, pipeline inside
+echo "today is $(date)"
+echo /usr/$(uname -m)/lib
+echo "$(cat /etc/hosts | wc -l) lines"
+
+# Exit status and variable expansion
 ls /nonexistent
 echo $?             # 1
 echo $HOME          # /Users/you
@@ -73,6 +79,8 @@ echo $HOME          # /Users/you
 |---------|----------|
 | Pipeline wiring | `pipe(2)` + `dup2(2)` in each child before `execvp`; all unused pipe ends closed in parent and child |
 | Stderr redirect | stdout redirected before stderr in `apply_redirections` so `> file 2>&1` correctly points both fds at the file; `2>&1` is `dup2(STDOUT_FILENO, STDERR_FILENO)` |
+| Command substitution | `$(cmd)` forks a subshell whose stdout is a pipe; parent drains the pipe with a doubling read loop and strips trailing newlines; stdin set to `/dev/null` suppresses `tcsetpgrp` inside the subshell; `SIGCHLD` blocked around fork+`waitpid` prevents the reaping handler racing with `cmd_subst`; expanded strings live in a 64 KB arena reset once per command line |
+| Depth-aware tokenizer | `next_arg()` and `split_pipes()` track `$(` nesting depth so spaces and `\|` inside a substitution are not treated as delimiters |
 | Process isolation | `setpgid(2)` puts every pipeline in its own process group; both parent and child call it to close the TOCTOU race |
 | Terminal handoff | `tcsetpgrp(3)` gives the terminal to the foreground pipeline; reclaimed by the shell on return |
 | Job table safety | `SIGCHLD` blocked (`sigprocmask`) around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields — no stdio |
