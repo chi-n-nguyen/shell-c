@@ -1,26 +1,26 @@
 # shell-c
 
-A POSIX-compliant Unix shell implemented in C with pipelines, job control, and async-signal-safe process management.
+A Unix shell written in C.
 
 ## Features
 
-- **Multi-stage pipelines** — arbitrary-length pipelines (`cmd1 | cmd2 | cmd3`)
-- **I/O redirection** — `<`, `>`, `>>`, `2>`, `2>>`, `2>&1`
-- **Background execution** — trailing `&`
-- **Job control** — `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z suspends a foreground job and registers it in the job table; `fg` restores terminal ownership via `tcsetpgrp` and resumes the process group with `SIGCONT`
-- **Signal handling** — Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops and job table mutations to eliminate handler races
-- **Process groups** — each pipeline runs in its own process group so signals reach every stage
-- **Command substitution** — `$(cmd)` forks a subshell, captures its stdout, and splices the result inline; supports embedded substitutions (`/usr/$(uname -m)/lib`) and pipelines inside (`$(cat f | wc -l)`)
-- **Variable expansion** — `$VAR` looks up the environment; `$?` expands to the last foreground exit status; `~` and `~user` expand to home directories via `getpwuid`/`getpwnam`
-- **Script execution** — `./shell-c script.sh` runs a file non-interactively; prompts, job notifications, and history recording are suppressed automatically
-- **Built-ins** — `cd`, `exit`, `export`, `history`, `jobs`, `fg`, `bg`
-- **Persistent history** — commands saved to `~/.shell-c_history` on exit and restored on startup; capped at 100 entries; not recorded during script execution
-- **Trace mode** — `--trace` logs every fork, exec, and pipe decision to stderr
+- **Pipelines**: arbitrary-length `cmd1 | cmd2 | cmd3`
+- **I/O redirection**: `<`, `>`, `>>`, `2>`, `2>>`, `2>&1`
+- **Command substitution**: `$(cmd)` runs in a subshell and splices stdout inline; works mid-token (`/usr/$(uname -m)/lib`) and with pipelines inside (`$(cat f | wc -l)`)
+- **Expansion**: `$VAR`, `$?`, `~`, `~user`
+- **Job control**: `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z stops a foreground job, `fg` restores terminal ownership and resumes with `SIGCONT`
+- **Background execution**: trailing `&`
+- **Signal handling**: Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops to eliminate handler races
+- **Script execution**: `./shell-c script.sh` runs non-interactively; prompts and history are suppressed automatically
+- **Persistent history**: saved to `~/.shell-c_history` on exit, restored on startup, capped at 100 entries
+- **Built-ins**: `cd`, `exit`, `export`, `history`, `jobs`, `fg`, `bg`
+- **Trace mode**: `--trace` logs every fork, exec, and pipe decision to stderr
 
 ## Build
 
 ```
 make
+make test   # run the regression suite (48 tests)
 ```
 
 Requires a C11 compiler and POSIX.1-2008.
@@ -28,48 +28,43 @@ Requires a C11 compiler and POSIX.1-2008.
 ## Usage
 
 ```
-./shell-c                  # interactive mode
-./shell-c script.sh        # run a script file
-./shell-c --trace          # interactive with execution tracing
+./shell-c                    # interactive
+./shell-c script.sh          # run a script file
+./shell-c --trace            # interactive with execution tracing
 ./shell-c --trace script.sh  # trace a script
 ```
 
 ## Examples
 
 ```sh
-# Multi-stage pipeline with I/O redirection
+# Multi-stage pipeline
 cat /etc/passwd | grep root | cut -d: -f1 > out.txt
 
 # Stderr redirection
-gcc bad.c 2> errors.txt          # stderr to file
-make 2>&1 | grep error           # merge stderr into stdout, then pipe
-make > build.log 2>&1            # stdout + stderr to same file
-make >> build.log 2>> build.log  # append both streams
+gcc bad.c 2> errors.txt       # stderr to file
+make 2>&1 | grep error        # merge stderr into stdout then pipe
+make > build.log 2>&1         # stdout and stderr to the same file
 
-# Background execution and job control
-sleep 60 &          # [1] 12345
-jobs                # [1] running   sleep 60 &
-fg %1               # brings job 1 to foreground
-# Ctrl+Z            # [1]+ stopped   sleep 60 &
-bg %1               # resumes in background
+# Job control
+sleep 60 &    # [1] 12345 — runs in background
+jobs          # [1] running   sleep 60 &
+fg %1         # bring to foreground
+              # Ctrl+Z to stop it
+bg %1         # resume in background
 
-# Command substitution — standalone, embedded, pipeline inside
+# Command substitution
 echo "today is $(date)"
 echo /usr/$(uname -m)/lib
 echo "$(cat /etc/hosts | wc -l) lines"
 
-# Tilde expansion
-echo ~              # /Users/you
-ls ~/Downloads
-echo ~root          # /var/root
-
-# Exit status and variable expansion
+# Variable and tilde expansion
 ls /nonexistent
-echo $?             # 1
-echo $HOME          # /Users/you
+echo $?        # 1
+echo ~         # /Users/you
+echo $HOME     # /Users/you
 ```
 
-## Built-in commands
+## Built-ins
 
 | Command | Description |
 |---------|-------------|
@@ -78,22 +73,21 @@ echo $HOME          # /Users/you
 | `export VAR=VALUE` | Set an environment variable |
 | `history` | Print command history |
 | `jobs` | List active background and stopped jobs |
-| `fg [%N]` | Bring job N (or the most recent) to the foreground |
-| `bg [%N]` | Resume stopped job N (or most recent) in the background |
+| `fg [%N]` | Bring job N to the foreground |
+| `bg [%N]` | Resume stopped job N in the background |
 
 ## Implementation notes
 
 | Concern | Approach |
 |---------|----------|
-| Pipeline wiring | `pipe(2)` + `dup2(2)` in each child before `execvp`; all unused pipe ends closed in parent and child |
-| Stderr redirect | stdout redirected before stderr in `apply_redirections` so `> file 2>&1` correctly points both fds at the file; `2>&1` is `dup2(STDOUT_FILENO, STDERR_FILENO)` |
-| Command substitution | `$(cmd)` forks a subshell whose stdout is a pipe; parent drains the pipe with a doubling read loop and strips trailing newlines; stdin set to `/dev/null` suppresses `tcsetpgrp` inside the subshell; `SIGCHLD` blocked around fork+`waitpid` prevents the reaping handler racing with `cmd_subst`; expanded strings live in a 64 KB arena reset once per command line |
-| Depth-aware tokenizer | `next_arg()` and `split_pipes()` track `$(` nesting depth so spaces and `\|` inside a substitution are not treated as delimiters |
-| Tilde expansion | handled at the start of `expand_token` before the `$` scan; `~` resolves via `$HOME` then `getpwuid(3)`; `~user` via `getpwnam(3)`; unknown user left unexpanded |
-| Persistent history | loaded from `~/.shell-c_history` in `history_init`; rewritten (capped at 100 lines) in `history_free`; suppressed in script mode via `isatty(fileno(src))` |
-| Script execution | `shell_loop` accepts `FILE *src`; `isatty(fileno(src))` gates prompts, job notifications, and history — no special-casing needed elsewhere |
+| Pipeline wiring | `pipe(2)` + `dup2(2)` per child before `execvp`; all unused ends closed in parent and child |
+| Stderr redirect | stdout is redirected before stderr so `> file 2>&1` correctly points both fds at the file |
+| Command substitution | subshell stdout captured via pipe; parent drains with a doubling read loop; stdin set to `/dev/null` to suppress terminal handoff inside the subshell; `SIGCHLD` blocked around fork and `waitpid` to prevent the reaping handler stealing the exit status |
+| Depth-aware tokenizer | `next_arg()` and `split_pipes()` track `$(` nesting depth so spaces and `|` inside a substitution are not treated as delimiters |
 | Process isolation | `setpgid(2)` puts every pipeline in its own process group; both parent and child call it to close the TOCTOU race |
-| Terminal handoff | `tcsetpgrp(3)` gives the terminal to the foreground pipeline; reclaimed by the shell on return |
-| Job table safety | `SIGCHLD` blocked (`sigprocmask`) around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields — no stdio |
-| Stopped job detection | `SA_NOCLDSTOP` omitted so `SIGCHLD` fires on `SIGTSTP`; `waitpid` called with `WUNTRACED` in the foreground wait path |
-| Background reaping | `waitpid(-1, WNOHANG \| WUNTRACED)` in `SIGCHLD` handler updates job status; main loop calls `jobs_notify_done()` before each prompt |
+| Terminal handoff | `tcsetpgrp(3)` transfers the terminal to the foreground pipeline; reclaimed by the shell on return |
+| Job table safety | `SIGCHLD` blocked via `sigprocmask` around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields, no stdio |
+| Stopped job detection | `SA_NOCLDSTOP` omitted so `SIGCHLD` fires on stop; `waitpid` uses `WUNTRACED` in the foreground wait path |
+| Background reaping | `waitpid(-1, WNOHANG \| WUNTRACED)` in `SIGCHLD` handler updates job status; main loop notifies before each prompt |
+| Persistent history | loaded in `history_init`; rewritten on exit capped at 100 lines; gated on `isatty(fileno(src))` so script runs don't pollute the file |
+| Script mode | `shell_loop` takes `FILE *src`; `isatty(fileno(src))` controls prompts, history, and job notifications with no extra flags |
