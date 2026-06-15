@@ -55,7 +55,10 @@ int run_builtin(Command *cmd) {
         }
         char *eq = strchr(cmd->argv[1], '=');
         if (!eq) {
-            fprintf(stderr, "export: expected VAR=VALUE format\n");
+            /* export VAR — mark existing variable for export; no-op if unset */
+            const char *val = getenv(cmd->argv[1]);
+            if (val && setenv(cmd->argv[1], val, 1) != 0)
+                perror("export");
             return 1;
         }
         *eq = '\0';
