@@ -11,7 +11,6 @@
  * are valid until the next reset.
  */
 void  expand_arena_reset(void);
-char *expand_arena_alloc(size_t n);
 
 /*
  * Expand $VAR, $?, and $(cmd) within a single token.

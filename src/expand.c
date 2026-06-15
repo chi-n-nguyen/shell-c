@@ -20,7 +20,7 @@ static size_t arena_off = 0;
 
 void expand_arena_reset(void) { arena_off = 0; }
 
-char *expand_arena_alloc(size_t n) {
+static char *expand_arena_alloc(size_t n) {
     if (arena_off + n > sizeof(arena)) return NULL;
     char *p = arena + arena_off;
     arena_off += n;

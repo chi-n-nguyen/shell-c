@@ -57,12 +57,6 @@ void history_print(void) {
 }
 
 /* Returns entry at 1-based index, or NULL if out of range */
-char *history_get(int index) {
-    if (index < 1 || index > count) return NULL;
-    return entries[index - 1];
-}
-
-int history_count(void) { return count; }
 
 /*
  * Persist the current ring buffer to ~/.shell-c_history (rewriting it
