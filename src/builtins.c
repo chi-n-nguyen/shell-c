@@ -36,7 +36,7 @@ int run_builtin(Command *cmd) {
 
     /* exit [code] */
     if (strcmp(name, "exit") == 0) {
-        int code = cmd->argv[1] ? atoi(cmd->argv[1]) : 0;
+        int code = cmd->argv[1] ? atoi(cmd->argv[1]) : last_exit;
         history_free();
         exit(code);
     }

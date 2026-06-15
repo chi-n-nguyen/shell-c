@@ -193,9 +193,10 @@ check "script: no prompt in stdout"  "$PROMPT_CHECK"  "0"
 # ═══════════════════════════════════════════════════════════════════════
 section "Exit status (shell process)"
 
-check_exit "exit 0"   "exit 0"   "0"
-check_exit "exit 1"   "exit 1"   "1"
-check_exit "exit 42"  "exit 42"  "42"
+check_exit "exit 0"          "exit 0"         "0"
+check_exit "exit 1"          "exit 1"         "1"
+check_exit "exit 42"         "exit 42"        "42"
+check_exit "exit no-arg=\$?" $'false\nexit'  "1"
 
 # ═══════════════════════════════════════════════════════════════════════
 section "Background execution"
