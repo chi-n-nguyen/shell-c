@@ -24,13 +24,33 @@ int run_builtin(Command *cmd) {
 
     char *name = cmd->argv[0];
 
-    /* cd [dir] — default to $HOME if no argument */
+    /* cd [dir] — default to $HOME; cd - returns to previous directory */
     if (strcmp(name, "cd") == 0) {
+        static char prev[4096];
         char *dir = cmd->argv[1];
-        if (!dir) dir = getenv("HOME");
-        if (!dir) { fprintf(stderr, "cd: HOME not set\n"); return 1; }
-        if (chdir(dir) < 0)
+        int print_dir = 0;
+
+        if (!dir) {
+            dir = getenv("HOME");
+            if (!dir) { fprintf(stderr, "cd: HOME not set\n"); return 1; }
+        } else if (strcmp(dir, "-") == 0) {
+            if (!prev[0]) { fprintf(stderr, "cd: no previous directory\n"); return 1; }
+            /* Copy out of prev before it is overwritten below */
+            static char target[4096];
+            strcpy(target, prev);
+            dir = target;
+            print_dir = 1;   /* POSIX: cd - prints the new directory */
+        }
+
+        char here[4096];
+        if (!getcwd(here, sizeof(here))) here[0] = '\0';
+
+        if (chdir(dir) < 0) {
             perror("cd");
+            return 1;
+        }
+        if (here[0]) strcpy(prev, here);
+        if (print_dir) { printf("%s\n", dir); fflush(stdout); }
         return 1;
     }
 

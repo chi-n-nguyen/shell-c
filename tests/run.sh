@@ -144,6 +144,8 @@ check "export overwrites"  "$(run 'export V=a' 'export V=b' 'echo $V')"    "b"
 check "\$? after true"     "$(run 'true'  'echo $?')"                       "0"
 check "\$? after false"    "$(run 'false' 'echo $?')"                       "1"
 check "\$? cmd not found"  "$(run 'no_such_cmd_xyz_abc' 'echo $?')"         "127"
+check "\$? pipe last fails" "$(run 'true | false' 'echo $?')"                "1"
+check "\$? pipe last wins"  "$(run 'false | true' 'echo $?')"                "0"
 
 check "~ expands to HOME"  "$(run 'echo ~')"       "$HOME"
 check "~/path"             "$(run 'echo ~/bin')"   "$HOME/bin"
@@ -155,6 +157,8 @@ check "cd absolute"       "$(run 'cd /' 'pwd')"                         "/"
 check "cd no-arg = HOME"  "$(run 'cd' 'pwd')"                           "$HOME"
 check "export + echo"     "$(run 'export MYVAR=42' 'echo $MYVAR')"      "42"
 check "cd then cmd"       "$(run 'cd /tmp' 'echo $(pwd)')"              "$(cd /tmp && pwd -P)"
+check "cd - returns back"  "$(run 'cd /usr' 'cd /' 'cd -' 'pwd')"        $'/usr\n/usr'
+check "cd - no history"    "$(printf 'cd -\n' | "$SHELL_C" 2>&1 >/dev/null)"  "cd: no previous directory"
 
 # ═══════════════════════════════════════════════════════════════════════
 section "Script file execution"

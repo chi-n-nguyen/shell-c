@@ -70,7 +70,7 @@ echo $HOME     # /Users/you
 
 | Command | Description |
 |---------|-------------|
-| `cd [dir]` | Change directory; defaults to `$HOME` |
+| `cd [dir]` | Change directory; defaults to `$HOME`; `cd -` returns to the previous directory |
 | `exit [code]` | Exit with optional status code |
 | `export VAR=VALUE` | Set an environment variable |
 | `history` | Print command history |
