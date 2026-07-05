@@ -1,5 +1,7 @@
 # shell-c
 
+[![CI](https://github.com/chi-n-nguyen/shell-c/actions/workflows/ci.yml/badge.svg)](https://github.com/chi-n-nguyen/shell-c/actions/workflows/ci.yml)
+
 A Unix shell written in C.
 
 ## Features
