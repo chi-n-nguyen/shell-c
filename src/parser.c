@@ -10,16 +10,24 @@
 
 /*
  * Split `line` on unquoted '|' characters, skipping any '|' that
- * appears inside a $(...) command substitution.  Writes pointers to
- * NUL-terminated segments into segs[] and returns the count, or -1 if
- * there are more than `max` segments.
+ * appears inside a $(...) command substitution or a '...'/"..." quoted
+ * string (quoting applies at any depth, so a quote opened inside a
+ * $(...) still masks '|' and parens until it closes).  Writes pointers
+ * to NUL-terminated segments into segs[] and returns the count, or -1
+ * if there are more than `max` segments.
  */
 static int split_pipes(char *line, char **segs, int max) {
     int   n     = 0;
     int   depth = 0;   /* $( nesting depth */
+    char  quote = 0;   /* open quote char ('\'' or '"'), 0 if none */
     char *start = line;
 
     for (char *p = line; *p; p++) {
+        if (quote) {
+            if (*p == quote) quote = 0;
+            continue;
+        }
+        if (*p == '\'' || *p == '"') { quote = *p; continue; }
         if (*p == '$' && *(p + 1) == '(') { depth++; p++; continue; }
         if (depth > 0) {
             if      (*p == '(') depth++;
@@ -44,11 +52,16 @@ static int split_pipes(char *line, char **segs, int max) {
 
 /*
  * Return the next whitespace-delimited token from *pos, advancing *pos.
- * Whitespace inside $(...) is not treated as a delimiter, so
- * $(date +%Y) is returned as a single token.
+ * Whitespace and '|' inside $(...) or inside a '...'/"..." quoted
+ * string are not treated as delimiters, so $(date +%Y) and "two words"
+ * each come back as a single token — quote characters themselves are
+ * left in place (expand_token() strips them and applies single- vs
+ * double-quote expansion rules). If a quote is never closed, *err is
+ * set to 1 and the rest of the segment is returned as one token, for
+ * the caller to reject as a syntax error.
  * Returns NULL when no more tokens remain.
  */
-static char *next_arg(char **pos) {
+static char *next_arg(char **pos, int *err) {
     char *p = *pos;
 
     /* skip leading whitespace */
@@ -57,8 +70,15 @@ static char *next_arg(char **pos) {
 
     char *start = p;
     int   depth = 0;
+    char  quote = 0;
 
     while (*p) {
+        if (quote) {
+            if (*p == quote) quote = 0;
+            p++;
+            continue;
+        }
+        if (*p == '\'' || *p == '"') { quote = *p; p++; continue; }
         if (*p == '$' && *(p + 1) == '(') { depth++; p += 2; continue; }
         if (depth > 0) {
             if      (*p == '(') depth++;
@@ -70,6 +90,8 @@ static char *next_arg(char **pos) {
         if (*p == ' ' || *p == '\t') break;
         p++;
     }
+
+    if (quote && err) *err = 1;
 
     if (*p) { *p = '\0'; p++; }
     *pos = p;
@@ -83,35 +105,45 @@ static char *next_arg(char **pos) {
 /*
  * Tokenise a single pipeline segment into a Command struct.
  * Redirection operators and '&' are recognised; all argument tokens
- * are passed through expand_token() for $VAR / $? / $() expansion.
- * Returns 0 on success, -1 on error.
+ * (and redirection filenames) are passed through expand_token() for
+ * quote removal and $VAR / $? / $() expansion.
+ * Returns 0 on success, -1 on error (including an unterminated quote,
+ * checked right after every next_arg() call so a garbled token from a
+ * dangling quote is never handed to expand_token — which could
+ * otherwise eagerly run a $(...) buried in it before the syntax error
+ * is caught).
  */
 static int parse_command(char *segment, Command *cmd, int trace_mode) {
     memset(cmd, 0, sizeof(Command));
 
     char *pos = segment;
     char *token;
+    int   qerr = 0;
 
-    while ((token = next_arg(&pos)) != NULL) {
+    while ((token = next_arg(&pos, &qerr)) != NULL) {
+        if (qerr) { fprintf(stderr, "shell-c: unterminated quote\n"); return -1; }
 
         /* Input redirection */
         if (strcmp(token, "<") == 0) {
-            char *file = next_arg(&pos);
+            char *file = next_arg(&pos, &qerr);
+            if (qerr) { fprintf(stderr, "shell-c: unterminated quote\n"); return -1; }
             if (!file) { fprintf(stderr, "shell-c: expected filename after <\n"); return -1; }
-            cmd->infile = file;
+            cmd->infile = expand_token(file, trace_mode);
 
         /* Append redirection */
         } else if (strcmp(token, ">>") == 0) {
-            char *file = next_arg(&pos);
+            char *file = next_arg(&pos, &qerr);
+            if (qerr) { fprintf(stderr, "shell-c: unterminated quote\n"); return -1; }
             if (!file) { fprintf(stderr, "shell-c: expected filename after >>\n"); return -1; }
-            cmd->outfile = file;
+            cmd->outfile = expand_token(file, trace_mode);
             cmd->append  = 1;
 
         /* Output redirection */
         } else if (strcmp(token, ">") == 0) {
-            char *file = next_arg(&pos);
+            char *file = next_arg(&pos, &qerr);
+            if (qerr) { fprintf(stderr, "shell-c: unterminated quote\n"); return -1; }
             if (!file) { fprintf(stderr, "shell-c: expected filename after >\n"); return -1; }
-            cmd->outfile = file;
+            cmd->outfile = expand_token(file, trace_mode);
             cmd->append  = 0;
 
         /* Stderr → stdout: 2>&1 */
@@ -120,16 +152,18 @@ static int parse_command(char *segment, Command *cmd, int trace_mode) {
 
         /* Stderr append: 2>>file  or  2>> file */
         } else if (strncmp(token, "2>>", 3) == 0) {
-            char *file = token[3] ? token + 3 : next_arg(&pos);
+            char *file = token[3] ? token + 3 : next_arg(&pos, &qerr);
+            if (qerr) { fprintf(stderr, "shell-c: unterminated quote\n"); return -1; }
             if (!file) { fprintf(stderr, "shell-c: expected filename after 2>>\n"); return -1; }
-            cmd->errfile     = file;
+            cmd->errfile     = expand_token(file, trace_mode);
             cmd->err_append  = 1;
 
         /* Stderr redirect: 2>file  or  2> file */
         } else if (strncmp(token, "2>", 2) == 0) {
-            char *file = token[2] ? token + 2 : next_arg(&pos);
+            char *file = token[2] ? token + 2 : next_arg(&pos, &qerr);
+            if (qerr) { fprintf(stderr, "shell-c: unterminated quote\n"); return -1; }
             if (!file) { fprintf(stderr, "shell-c: expected filename after 2>\n"); return -1; }
-            cmd->errfile     = file;
+            cmd->errfile     = expand_token(file, trace_mode);
             cmd->err_append  = 0;
 
         /* Background flag */
@@ -141,7 +175,7 @@ static int parse_command(char *segment, Command *cmd, int trace_mode) {
                 fprintf(stderr, "shell-c: too many arguments\n");
                 return -1;
             }
-            /* Expand $VAR, $?, $(cmd) — may execute a subshell eagerly */
+            /* Expand quotes, $VAR, $?, $(cmd) — may execute a subshell eagerly */
             cmd->argv[cmd->argc++] = expand_token(token, trace_mode);
         }
     }

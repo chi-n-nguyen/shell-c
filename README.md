@@ -8,6 +8,7 @@ A Unix shell written in C.
 - **I/O redirection**: `<`, `>`, `>>`, `2>`, `2>>`, `2>&1`
 - **Command substitution**: `$(cmd)` runs in a subshell and splices stdout inline; works mid-token (`/usr/$(uname -m)/lib`) and with pipelines inside (`$(cat f | wc -l)`)
 - **Expansion**: `$VAR`, `$?`, `~`, `~user`
+- **Quoting**: `'...'` (literal, no expansion) and `"..."` (groups text, `$` still expands inside); both suppress word-splitting and `|`/redirection-operator parsing, so `echo "a|b"` and `echo "<"` do what you'd expect. No backslash escapes yet, so a quote can't contain its own quote character.
 - **Job control**: `jobs`, `fg [%N]`, `bg [%N]`; Ctrl+Z stops a foreground job, `fg` restores terminal ownership and resumes with `SIGCONT`
 - **Background execution**: trailing `&`
 - **Signal handling**: Ctrl+C and Ctrl+Z reach the foreground pipeline, not the shell; `SIGCHLD` is blocked around fork loops to eliminate handler races
@@ -20,7 +21,7 @@ A Unix shell written in C.
 
 ```
 make
-make test   # run the regression suite (56 tests)
+make test   # run the regression suite (70 tests)
 ```
 
 Requires a C11 compiler and POSIX.1-2008.
@@ -62,6 +63,12 @@ ls /nonexistent
 echo $?        # 1
 echo ~         # /Users/you
 echo $HOME     # /Users/you
+
+# Quoting
+echo "hello world"     # hello world      (one arg, space preserved)
+echo 'no $expansion'   # no $expansion    (single quotes are literal)
+echo "$HOME/logs"      # /Users/you/logs  ($ still expands in double quotes)
+echo "a|b"              # a|b              (quoted | isn't a pipe)
 ```
 
 ## Built-ins
@@ -83,7 +90,8 @@ echo $HOME     # /Users/you
 | Pipeline wiring | `pipe(2)` + `dup2(2)` per child before `execvp`; all unused ends closed in parent and child |
 | Stderr redirect | stdout is redirected before stderr so `> file 2>&1` correctly points both fds at the file |
 | Command substitution | subshell stdout captured via pipe; parent drains with a doubling read loop; stdin set to `/dev/null` to suppress terminal handoff inside the subshell; `SIGCHLD` blocked around fork and `waitpid` to prevent the reaping handler stealing the exit status |
-| Depth-aware tokenizer | `next_arg()` and `split_pipes()` track `$(` nesting depth so spaces and `|` inside a substitution are not treated as delimiters |
+| Depth-aware tokenizer | `next_arg()` and `split_pipes()` track `$(` nesting depth and open quotes so spaces, `|`, and parens inside a substitution or a quoted string are not treated as delimiters |
+| Quoting | `next_arg()`/`split_pipes()` find token/segment boundaries without stripping quote chars; `expand_token()` removes them in the same pass it expands `$`, since single- vs double-quote is what decides whether `$` expands |
 | Process isolation | `setpgid(2)` puts every pipeline in its own process group; both parent and child call it to close the TOCTOU race |
 | Terminal handoff | `tcsetpgrp(3)` transfers the terminal to the foreground pipeline; reclaimed by the shell on return |
 | Job table safety | `SIGCHLD` blocked via `sigprocmask` around `fork` loops and `job_add`/`job_remove`; handler writes only `volatile int` fields, no stdio |

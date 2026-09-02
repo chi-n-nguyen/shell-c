@@ -151,6 +151,36 @@ check "~ expands to HOME"  "$(run 'echo ~')"       "$HOME"
 check "~/path"             "$(run 'echo ~/bin')"   "$HOME/bin"
 
 # ═══════════════════════════════════════════════════════════════════════
+section "Quoting"
+
+check "double quotes group spaces"   "$(run 'echo "hello world"')"        "hello world"
+check "single quotes group spaces"   "$(run "echo 'hello world'")"        "hello world"
+check "quotes suppress pipe split"   "$(run 'echo "a|b"')"                "a|b"
+check "quoted redirect op is literal" "$(run 'echo "<"')"                 "<"
+check "quoted & is literal"          "$(run 'echo hi "&"')"               "hi &"
+check "quoted ~ is literal"          "$(run "echo '~'")"                  "~"
+check "adjacent quotes join"         "$(run $'echo \'foo\'"bar"')"        "foobar"
+
+check "single quotes: no \$ expansion" \
+    "$(run 'export X=hi' $'echo \'$X\'')"         '$X'
+check "double quotes: \$ still expands" \
+    "$(run 'export X=hi' 'echo "$X there"')"      "hi there"
+check "mixed quoting in one token" \
+    "$(run 'export X=world' 'echo hello_"$X"_end')" "hello_world_end"
+
+check "empty quoted string is a real (empty) arg" \
+    "$(run 'printf "<%s>" before "" after')"      "<before><><after>"
+
+check "unterminated quote: syntax error, not a crash" \
+    "$(run 'echo "unterminated' 'echo alive')"    "alive"
+check "quoting doesn't hide a real empty pipe segment" \
+    "$(run "echo 'a' | | cat" 'echo $?')"         "1"
+
+QFILE="$TMP/quoted file.txt"
+run "echo hi > \"$QFILE\""
+check "quoted redirect target with a space" "$(cat "$QFILE")" "hi"
+
+# ═══════════════════════════════════════════════════════════════════════
 section "Built-in commands"
 
 check "cd absolute"       "$(run 'cd /' 'pwd')"                         "/"

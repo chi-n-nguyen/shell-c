@@ -123,19 +123,28 @@ char *cmd_subst(const char *cmd, int trace_mode) {
 /* ------------------------------------------------------------------ */
 
 /*
- * Expand all $ sequences in tok and return a pointer into the arena.
- * Handles embedded substitutions, e.g. "/usr/$(uname -m)/lib".
+ * Remove quotes and expand all $ sequences in tok, returning a pointer
+ * into the arena. Handles embedded substitutions, e.g.
+ * "/usr/$(uname -m)/lib".
  *
  * Supported:
  *   $(cmd)    — command substitution (recursive: nested $() ok)
  *   $?        — last foreground exit status
  *   $VARNAME  — environment variable (unset → empty string)
+ *   '...'     — literal text; no $ or ~ expansion inside
+ *   "..."     — groups text (e.g. spaces) but $ still expands inside
  *
- * If tok contains no '$' the original pointer is returned unchanged
- * (no arena allocation).
+ * The tokenizer (next_arg/split_pipes) treats a quoted region as
+ * opaque so whitespace and '|' inside it aren't delimiters, but it
+ * does not strip the quote characters or care which kind was used —
+ * that happens here, in one pass, since quote type must be known to
+ * decide whether $ still expands.
+ *
+ * If tok contains no '$', quote character, or leading '~' the
+ * original pointer is returned unchanged (no arena allocation).
  */
 char *expand_token(const char *tok, int trace_mode) {
-    if (!strchr(tok, '$') && tok[0] != '~')
+    if (!strchr(tok, '$') && !strchr(tok, '\'') && !strchr(tok, '"') && tok[0] != '~')
         return (char *)tok;
 
     /* Build into a local buffer first, then copy to the arena */
@@ -143,9 +152,18 @@ char *expand_token(const char *tok, int trace_mode) {
     char *out = tmp;
     char *lim = tmp + sizeof(tmp) - 1;
     const char *p = tok;
+    char in_quote = 0;   /* 0, '\'', or '"' — quote currently open */
 
     while (*p && out < lim) {
-        /* Tilde expansion — only at the very start of the token */
+        /* Quote characters delimit a region but are never copied */
+        if (!in_quote && (*p == '\'' || *p == '"')) { in_quote = *p; p++; continue; }
+        if (in_quote  && *p == in_quote)             { in_quote = 0;  p++; continue; }
+
+        /* Single-quoted text is fully literal: no $ or ~ expansion */
+        if (in_quote == '\'') { *out++ = *p++; continue; }
+
+        /* Tilde expansion — only at the very start of the token, and
+           only when nothing (not even a quote char) precedes it */
         if (*p == '~' && p == tok) {
             const char *home = NULL;
 
@@ -183,13 +201,23 @@ char *expand_token(const char *tok, int trace_mode) {
 
         if (*(p + 1) == '(') {
             /* ---- command substitution $(...)  ---- */
-            /* Walk forward counting parenthesis depth to find the match */
+            /* Walk forward counting parenthesis depth to find the
+               match; a paren inside a quoted string doesn't count
+               (e.g. $(echo "a)b") ), mirroring next_arg/split_pipes. */
             int depth = 1;
             const char *inner = p + 2;
             const char *q = inner;
+            char iq = 0;
             while (*q && depth > 0) {
-                if      (*q == '(') depth++;
-                else if (*q == ')') depth--;
+                if (iq) {
+                    if (*q == iq) iq = 0;
+                } else if (*q == '\'' || *q == '"') {
+                    iq = *q;
+                } else if (*q == '(') {
+                    depth++;
+                } else if (*q == ')') {
+                    depth--;
+                }
                 if (depth > 0) q++;
                 else            break;
             }
