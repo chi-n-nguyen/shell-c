@@ -47,7 +47,7 @@ make 2>&1 | grep error        # merge stderr into stdout then pipe
 make > build.log 2>&1         # stdout and stderr to the same file
 
 # Job control
-sleep 60 &    # [1] 12345 — runs in background
+sleep 60 &    # [1] 12345, runs in background
 jobs          # [1] running   sleep 60 &
 fg %1         # bring to foreground
               # Ctrl+Z to stop it
@@ -68,7 +68,7 @@ echo $HOME     # /Users/you
 echo "hello world"     # hello world      (one arg, space preserved)
 echo 'no $expansion'   # no $expansion    (single quotes are literal)
 echo "$HOME/logs"      # /Users/you/logs  ($ still expands in double quotes)
-echo "a|b"              # a|b              (quoted | isn't a pipe)
+echo "a|b"             # a|b              (quoted | isn't a pipe)
 ```
 
 ## Built-ins
@@ -99,3 +99,15 @@ echo "a|b"              # a|b              (quoted | isn't a pipe)
 | Background reaping | `waitpid(-1, WNOHANG \| WUNTRACED)` in `SIGCHLD` handler updates job status; main loop notifies before each prompt |
 | Persistent history | loaded in `history_init`; rewritten on exit capped at 100 lines; gated on `isatty(fileno(src))` so script runs don't pollute the file |
 | Script mode | `shell_loop` takes `FILE *src`; `isatty(fileno(src))` controls prompts, history, and job notifications with no extra flags |
+| Malformed input handling | a stray or misplaced pipe (`cmd1 \| \| cmd2`) and an unterminated quote are caught as syntax errors instead of desyncing the parsed command list from its count, which used to crash the shell trying to exec a null command |
+
+## What's next
+
+Shell-c is still growing, here's what's on the list next:
+
+- **Logical operators (`&&`, `||`)**, so commands can chain on success or failure, like `make && ./run` or `test -f config.txt || echo missing`.
+- **Bare variable assignment** (`VAR=value` without needing `export`), so you can set a local variable without exporting it to every child process.
+- **Comments in scripts** (`# like this`), so script files can explain themselves instead of erroring on any line that starts with `#`.
+- **`unset`**, to remove a variable you've exported, since right now there's no way back once you've set one.
+- **Glob expansion** (`*.txt`, `file?.log`), so wildcards actually match filenames instead of being passed through as literal text.
+- **Backslash escapes inside quotes**, so a quoted string can contain its own quote character.
