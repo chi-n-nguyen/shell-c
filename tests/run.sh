@@ -218,7 +218,15 @@ section "Edge cases"
 
 check "blank lines ignored"    "$(run '' '' 'echo ok' '')"       "ok"
 check "multi-level subst"      "$(run 'echo $(echo $(echo hi))')" "hi"
-check "empty pipeline segment" "$(run 'echo hi | cat')"           "hi"
+
+# Empty pipeline segments (stray "||", leading/trailing "|") used to
+# desync cmds[] from ncmds and crash the shell trying to exec a NULL
+# argv. They're syntax errors now — the shell should report one and
+# keep running (not crash), matching the exit code path used elsewhere.
+check "empty pipe segment: middle"    "$(run 'echo hi | | cat'  'echo $?')"   "1"
+check "empty pipe segment: leading"   "$(run '| echo hi'        'echo $?')"   "1"
+check "empty pipe segment: trailing"  "$(run 'echo hi |'        'echo $?')"   "1"
+check "shell survives a bad pipe"     "$(run 'echo hi | | cat'  'echo ok')"   "ok"
 
 # Unknown command: shell-c should print an error to stderr (not stdout)
 # and last_exit should be 127

@@ -158,6 +158,15 @@ static int parse_command(char *segment, Command *cmd, int trace_mode) {
  * Split input on '|' (depth-aware) then parse each segment into a
  * Command.  trace_mode is threaded through so cmd_subst can emit
  * [trace] lines for commands executed during expansion.
+ *
+ * An empty segment (stray "||", leading "|", or trailing "|") is a
+ * syntax error rather than silently skipped: pl->cmds[] is indexed by
+ * segment position, so dropping a segment without dropping its index
+ * would desync it from ncmds and hand the executor a zeroed-out
+ * Command (NULL argv) to exec. A whitespace-only *whole line* (a
+ * single segment, no pipes) is still ignored silently, matching
+ * ordinary blank-input handling.
+ *
  * Returns 0 on success, -1 on error.
  */
 int parse_pipeline(char *line, Pipeline *pl, int trace_mode) {
@@ -170,8 +179,12 @@ int parse_pipeline(char *line, Pipeline *pl, int trace_mode) {
     for (int i = 0; i < nseg; i++) {
         if (parse_command(segs[i], &pl->cmds[i], trace_mode) < 0)
             return -1;
-        if (pl->cmds[i].argc == 0)
-            continue;
+        if (pl->cmds[i].argc == 0) {
+            if (nseg == 1) continue;
+            fprintf(stderr, "shell-c: syntax error near unexpected token `|'\n");
+            last_exit = 1;
+            return -1;
+        }
         pl->ncmds++;
     }
 

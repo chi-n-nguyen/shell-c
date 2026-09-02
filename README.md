@@ -20,7 +20,7 @@ A Unix shell written in C.
 
 ```
 make
-make test   # run the regression suite (48 tests)
+make test   # run the regression suite (56 tests)
 ```
 
 Requires a C11 compiler and POSIX.1-2008.

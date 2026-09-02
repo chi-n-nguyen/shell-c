@@ -56,8 +56,6 @@ void history_print(void) {
         printf("  %3d  %s\n", i + 1, entries[i]);
 }
 
-/* Returns entry at 1-based index, or NULL if out of range */
-
 /*
  * Persist the current ring buffer to ~/.shell-c_history (rewriting it
  * so the file never grows beyond HISTORY_MAX lines), then free memory.

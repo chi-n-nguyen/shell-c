@@ -209,9 +209,15 @@ char *expand_token(const char *tok, int trace_mode) {
             p = (*q == ')') ? q + 1 : q;
 
         } else if (*(p + 1) == '?') {
-            /* ---- $?  ---- */
-            int n = snprintf(out, (size_t)(lim - out), "%d", last_exit);
-            if (n > 0) out += n;
+            /* ---- $?  ----
+             * snprintf's return value is the length it would have
+             * written, not the length it did — using it unchecked
+             * (as size available) can walk `out` past `lim`. Render
+             * to a small local buffer first and bounds-check it like
+             * every other expansion below. */
+            char numbuf[16];
+            int  n = snprintf(numbuf, sizeof(numbuf), "%d", last_exit);
+            if (n > 0 && out + n < lim) { memcpy(out, numbuf, (size_t)n); out += n; }
             p += 2;
 
         } else if (isalpha((unsigned char)*(p + 1)) || *(p + 1) == '_') {
